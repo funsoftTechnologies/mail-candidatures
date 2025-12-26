@@ -63,8 +63,25 @@ public class MainApp extends Application {
 
                     confirm.showAndWait().ifPresent(response -> {
                         if (response == ButtonType.OK) {
-                            controller.delete(c);
+                            try {
+                                FileSystemService.deleteRecursively(c.getDossier());
+
+                            } catch (IOException ex) {
+                                ex.printStackTrace();
+
+                                Alert alert = new Alert(Alert.AlertType.ERROR);
+                                alert.setTitle("Erreur");
+                                alert.setHeaderText("Suppression impossible");
+                                alert.setContentText("Impossible de supprimer les fichiers sur le disque.");
+                                alert.showAndWait();
+                                return;
+                            }
+
                             table.getItems().remove(c);
+                            controller.delete(c);
+
+                            // Vider le PdfViewerPane si la candidature supprimée était sélectionnée
+                            pdfViewerPane.setPdfList(FXCollections.observableArrayList(), null);
                         }
                     });
                 }
@@ -80,6 +97,12 @@ public class MainApp extends Application {
 
             return row;
         });
+        TableColumn<Candidature, Number> colIndex = new TableColumn<>("N°");
+        colIndex.setCellValueFactory(c ->
+                new javafx.beans.property.ReadOnlyObjectWrapper<>(table.getItems().indexOf(c.getValue()) + 1)
+        );
+        colIndex.setSortable(false); // optionnel, l'index n'a pas besoin d'être triable
+        colIndex.setPrefWidth(50); // largeur fixe adaptée
 
         TableColumn<Candidature, LocalDate> colDate = new TableColumn<>("Date");
         colDate.setCellValueFactory(c ->
@@ -97,7 +120,7 @@ public class MainApp extends Application {
         colStatut.setCellValueFactory(c ->
                 new javafx.beans.property.SimpleStringProperty(c.getValue().getStatut().name()));
 
-        table.getColumns().addAll(colDate, colEntreprise, colPoste, colStatut);
+        table.getColumns().addAll(colIndex, colDate, colEntreprise, colPoste, colStatut);
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
 
 
@@ -135,7 +158,9 @@ public class MainApp extends Application {
 
             Candidature first = table.getSelectionModel().getSelectedItem();
             if (first != null) {
-                pdfViewerPane.setPdfList(first.getDocuments());
+                // Trier du plus récent au plus ancien
+                first.getDocuments().sort((d1, d2) -> d2.getDateImport().compareTo(d1.getDateImport()));
+                pdfViewerPane.setPdfList(first.getDocuments(), first);
             }
         }
 
@@ -144,16 +169,24 @@ public class MainApp extends Application {
            ========================= */
         table.getSelectionModel().selectedItemProperty().addListener((obs, old, c) -> {
             if (c == null) {
-                pdfViewerPane.setPdfList(FXCollections.observableArrayList());
+                pdfViewerPane.setPdfList(FXCollections.observableArrayList(), null);
                 return;
             }
-            pdfViewerPane.setPdfList(c.getDocuments());
+            // Trier du plus récent au plus ancien
+            c.getDocuments().sort((d1, d2) -> d2.getDateImport().compareTo(d1.getDateImport()));
+            pdfViewerPane.setPdfList(c.getDocuments(), c);
         });
 
         /* =========================
            MENU CONTEXTUEL PDF
            ========================= */
         ContextMenu docMenu = new ContextMenu();
+
+        // Forcer refresh
+        var selected = pdfViewerPane.getPdfSelector().getSelectionModel().getSelectedItem();
+        pdfViewerPane.getPdfSelector().getItems().setAll(pdfViewerPane.getPdfSelector().getItems());
+        pdfViewerPane.getPdfSelector().getSelectionModel().select(selected);
+
 
         MenuItem changeType = new MenuItem("Modifier type");
         changeType.setOnAction(e -> {
@@ -165,14 +198,31 @@ public class MainApp extends Application {
             dialog.setTitle("Type du document");
             dialog.setHeaderText("Choisir le type");
 
-            dialog.showAndWait().ifPresent(doc::setType);
+            dialog.showAndWait().ifPresent(newType -> {
+                try {
+                    Path newPath = FileSystemService.moveDocument(
+                            doc.getFichier(),
+                            table.getSelectionModel().getSelectedItem().getDossier(),
+                            newType
+                    );
 
-            // Forcer refresh
-            var selected = pdfViewerPane.getPdfSelector().getSelectionModel().getSelectedItem();
-            pdfViewerPane.getPdfSelector().getItems().setAll(pdfViewerPane.getPdfSelector().getItems());
-            pdfViewerPane.getPdfSelector().getSelectionModel().select(selected);
+                    doc.setType(newType);
+                    doc.setFichier(newPath);
 
-            controller.save();
+                    controller.save();
+
+                } catch (IOException ex) {
+                    ex.printStackTrace();
+
+                    Alert alert = new Alert(Alert.AlertType.ERROR);
+                    alert.setTitle("Erreur");
+                    alert.setHeaderText("Déplacement impossible");
+                    alert.setContentText("Le document n'a pas pu être déplacé.");
+                    alert.showAndWait();
+                }
+            });
+
+
         });
 
         MenuItem deleteDoc = new MenuItem("Supprimer");
@@ -186,6 +236,8 @@ public class MainApp extends Application {
 
             pdfViewerPane.getPdfSelector().getItems().remove(doc);
             controller.save();
+            table.refresh();
+
         });
 
         docMenu.getItems().addAll(changeType, deleteDoc);
@@ -284,6 +336,7 @@ public class MainApp extends Application {
             controller.save();
             table.refresh();
         });
+        table.refresh();
     }
 
 
@@ -322,6 +375,7 @@ public class MainApp extends Application {
         });
 
         dialog.showAndWait().ifPresent(controller::add);
+        table.refresh();
     }
 
     private void importPdf(Stage stage) throws IOException {
@@ -335,17 +389,15 @@ public class MainApp extends Application {
         File f = chooser.showOpenDialog(stage);
         if (f == null) return;
 
-// Charger le PDF pour récupérer sa date
+        // Charger le PDF pour récupérer sa date
         LocalDate pdfDate = null;
         try (PDDocument doc = Loader.loadPDF(f)) {
-            // Récupère la date de création depuis les metadata du PDF
             var creationDate = doc.getDocumentInformation().getCreationDate();
             if (creationDate != null) {
                 pdfDate = creationDate.toInstant()
                         .atZone(ZoneId.systemDefault())
                         .toLocalDate();
             } else {
-                // fallback : date du fichier si metadata absente
                 pdfDate = Files.readAttributes(f.toPath(), BasicFileAttributes.class)
                         .creationTime()
                         .toInstant()
@@ -356,17 +408,26 @@ public class MainApp extends Application {
             ex.printStackTrace();
         }
 
-// Crée le DocumentFile
+        // Crée le DocumentFile
         DocumentFile doc = PdfImportService.importer(
                 f.toPath(),
                 c.getDossier(),
                 DocumentType.REPONSE
         );
 
+        // Ajouter le document à la candidature
         c.getDocuments().add(doc);
-        pdfViewerPane.setPdfList(c.getDocuments());
+
+        // Trier la liste des PDFs (du plus récent au plus ancien)
+        c.getDocuments().sort((d1, d2) -> d2.getDateImport().compareTo(d1.getDateImport()));
+
+        // Mettre à jour le PdfViewerPane
+        pdfViewerPane.setPdfList(c.getDocuments(), c);
+
+        // Sauvegarder dans le JSON
         controller.save();
     }
+
 
     public static void main(String[] args) {
         launch(args);

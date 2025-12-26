@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 public class PdfImportService {
@@ -17,17 +18,36 @@ public class PdfImportService {
             DocumentType type
     ) throws IOException {
 
-        Files.createDirectories(dossierCandidature);
+        // 1. Sous-dossier selon le type
+        Path targetDir = dossierCandidature.resolve(type.getFolder());
+        Files.createDirectories(targetDir);
 
-        Path dest = dossierCandidature.resolve(sourcePdf.getFileName());
+        String fileName = sourcePdf.getFileName().toString();
+        Path target = targetDir.resolve(sourcePdf.getFileName());
 
-        Files.copy(sourcePdf, dest, StandardCopyOption.REPLACE_EXISTING);
+        // 2. Éviter écrasement silencieux
+        if (Files.exists(target)) {
+            String base = fileName.replaceFirst("(?i)\\.pdf$", "");
+            String newName = base + "_" + System.currentTimeMillis() + ".pdf";
+            target = targetDir.resolve(newName);
+        }
 
-        return new DocumentFile(
-                dest,
-                type,
-                LocalDateTime.now(),
-                sourcePdf.getFileName().toString()
+        // 3. MOVE réel
+        Files.move(
+                sourcePdf,
+                target,
+                StandardCopyOption.REPLACE_EXISTING
+                // ⚠ ATOMIC_MOVE à éviter ici (voir plus bas)
         );
+
+        // 4. DocumentFile cohérent
+        DocumentFile doc = new DocumentFile();
+        doc.setNom(target.getFileName().toString());
+        doc.setFichier(target);
+        doc.setType(type);
+        doc.setDateImport(LocalDateTime.now());
+
+        return doc;
     }
+
 }

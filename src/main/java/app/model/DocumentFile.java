@@ -1,9 +1,7 @@
 package app.model;
 
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import lombok.*;
 
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -14,6 +12,8 @@ import java.util.Objects;
 @Setter
 @AllArgsConstructor
 @NoArgsConstructor
+@Data
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class DocumentFile {
 
     private Path fichier;
@@ -31,6 +31,11 @@ public class DocumentFile {
     @Override
     public int hashCode() {
         return Objects.hash(fichier);
+    }
+
+    @Override
+    public String toString() {
+        return type + " - " + nom; // ou juste nom si tu préfères
     }
 }
 

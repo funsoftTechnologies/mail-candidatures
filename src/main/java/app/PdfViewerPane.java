@@ -1,9 +1,11 @@
 package app;
 
 import app.controller.MainController;
+import app.model.Candidature;
 import app.model.DocumentFile;
 import app.model.DocumentType;
 import javafx.application.Platform;
+import javafx.collections.FXCollections;
 import javafx.concurrent.Task;
 import javafx.embed.swing.SwingFXUtils;
 import javafx.geometry.Insets;
@@ -20,20 +22,25 @@ import org.apache.pdfbox.rendering.PDFRenderer;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class PdfViewerPane extends BorderPane {
 
     private final MainController controller;
+    private final AtomicLong renderVersion = new AtomicLong();
 
     private DocumentFile currentDocumentFile;
+    private Path currentPdfPath;
 
     private final ImageView imageView;
     private PDDocument currentDocument;
     private PDFRenderer renderer;
-    private int currentPage;
+    private int currentPage = 0;
     private Task<Image> currentRenderTask;
+    private Candidature currentCandidature;
 
     /* =========================
        Accès externe ComboBox
@@ -73,7 +80,10 @@ public class PdfViewerPane extends BorderPane {
                 .addListener((obs, old, doc) -> {
                     if (doc != null) {
                         currentDocumentFile = doc;
-                        openPdf(doc.getFichier());
+                        currentPdfPath = doc.getFichier();
+                        currentPage = 0;
+
+                        openPdf(currentPdfPath); // <<-- il faut appeler openPdf pour charger le PDF
                     }
                 });
 
@@ -208,22 +218,32 @@ public class PdfViewerPane extends BorderPane {
 
         currentDocumentFile.setType(newType);
 
-        // Forcer rafraîchissement du ComboBox
-        DocumentFile selected = pdfSelector.getValue();
-        pdfSelector.setValue(null);
-        pdfSelector.setValue(selected);
-
         // Sauvegarde dans le JSON
         if (controller != null) {
             controller.save();
         }
+
+        // Forcer le rafraîchissement du ComboBox
+        pdfSelector.setCellFactory(lv -> new ListCell<>() {
+            @Override
+            protected void updateItem(DocumentFile item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null ? null : item.getType() + " - " + item.getNom());
+            }
+        });
+        pdfSelector.setButtonCell(pdfSelector.getCellFactory().call(null));
+
+        // Re-sélectionner l’élément courant pour mettre à jour l’affichage
+        pdfSelector.getSelectionModel().select(currentDocumentFile);
     }
+
+
 
     /* =========================
        Suppression PDF
        ========================= */
     private void deleteCurrentPdf() {
-        if (currentDocumentFile == null) return;
+        if (currentDocumentFile == null || currentCandidature == null) return;
 
         Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
         confirm.setTitle("Suppression");
@@ -232,116 +252,184 @@ public class PdfViewerPane extends BorderPane {
 
         confirm.showAndWait().ifPresent(result -> {
             if (result == ButtonType.OK) {
-
                 int index = pdfSelector.getSelectionModel().getSelectedIndex();
+
+                // Supprimer du disque
+                currentDocumentFile.getFichier().toFile().delete();
+
+                // Supprimer du modèle
+                currentCandidature.getDocuments().remove(currentDocumentFile);
+
+                // Supprimer de l'UI
                 pdfSelector.getItems().remove(currentDocumentFile);
 
+                // Mettre à jour currentDocumentFile
                 if (pdfSelector.getItems().isEmpty()) {
-                    closePdf();
                     currentDocumentFile = null;
+                    closePdf();
                 } else {
-                    pdfSelector.getSelectionModel()
-                            .select(Math.min(index, pdfSelector.getItems().size() - 1));
+                    // Sélectionner le PDF suivant ou le dernier si on a supprimé le dernier
+                    int newIndex = Math.min(index, pdfSelector.getItems().size() - 1);
+                    pdfSelector.getSelectionModel().select(newIndex);
                 }
+
+                // Sauvegarder dans JSON
+                controller.save();
             }
         });
     }
+
+
+
 
     /* =========================
        Chargement PDF
        ========================= */
-    private synchronized void openPdf(java.nio.file.Path path) {
-        // Annuler rendu en cours
-        if (currentRenderTask != null && currentRenderTask.isRunning()) {
-            currentRenderTask.cancel();
-        }
-
-        // On ferme le document précédent **après la fin du rendu** pour éviter les exceptions
-        if (currentDocument != null) {
-            try { currentDocument.close(); } catch (IOException ignored) {}
-        }
-
-        try {
-            currentDocument = Loader.loadPDF(path.toFile());
-            renderer = new PDFRenderer(currentDocument);
-            currentPage = 0;
-            renderPage();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+//    private synchronized void openPdf(Path path) {
+//
+//        if (currentRenderTask != null && currentRenderTask.isRunning()) {
+//            currentRenderTask.cancel();
+//        }
+//
+//        // Fermer l'ancien document
+//        if (currentDocument != null) {
+//            try { currentDocument.close(); } catch (IOException ignored) {}
+//        }
+//
+//        try {
+//            currentDocument = Loader.loadPDF(path.toFile());
+//            renderer = new PDFRenderer(currentDocument);
+//            currentPage = 0;
+//            renderPage(); // maintenant safe
+//        } catch (IOException e) {
+//            e.printStackTrace();
+//        }
+//    }
+    private synchronized void openPdf(Path path) {
+        currentPdfPath = path;
+        currentPage = 0;
+        renderPage();
     }
+
+
 
     /* =========================
        Rendu page (thread-safe)
        ========================= */
-    private synchronized void renderPage() {
-        if (currentDocument == null) return;
+//    private synchronized void renderPage() {
+//        if (currentDocument == null) return; // utilise currentDocument au lieu de currentPdfPath
+//
+//        if (currentRenderTask != null && currentRenderTask.isRunning()) {
+//            currentRenderTask.cancel();
+//        }
+//
+//        currentRenderTask = new Task<>() {
+//            @Override
+//            protected Image call() throws Exception {
+//                BufferedImage image = renderer.renderImageWithDPI(currentPage, 150);
+//                return SwingFXUtils.toFXImage(image, null);
+//            }
+//        };
+//
+//        currentRenderTask.setOnSucceeded(e -> {
+//            if (!currentRenderTask.isCancelled()) {
+//                double screenHeight = javafx.stage.Screen.getPrimary().getBounds().getHeight();
+//                imageView.setFitHeight(screenHeight);
+//                imageView.setImage(currentRenderTask.getValue());
+//            }
+//        });
+//
+//        currentRenderTask.setOnFailed(e -> {
+//            Throwable ex = currentRenderTask.getException();
+//            if (!(ex instanceof CancellationException)) {
+//                ex.printStackTrace();
+//            }
+//        });
+//
+//        new Thread(currentRenderTask).start();
+//    }
+    private void renderPage() {
+        if (currentPdfPath == null) return;
 
-        // Annuler le rendu en cours si existant
-        if (currentRenderTask != null && currentRenderTask.isRunning()) {
-            currentRenderTask.cancel();
-        }
+        final long myVersion = renderVersion.incrementAndGet();
+        final Path pdfPath = currentPdfPath;
+        final int pageToRender = currentPage;
 
-        // Nouveau rendu
-        currentRenderTask = new Task<>() {
+        Task<Image> task = new Task<>() {
             @Override
             protected Image call() throws Exception {
-                return SwingFXUtils.toFXImage(renderer.renderImageWithDPI(currentPage, 150), null);
+                try (PDDocument document = Loader.loadPDF(pdfPath.toFile())) {
+                    PDFRenderer renderer = new PDFRenderer(document);
+                    BufferedImage img = renderer.renderImageWithDPI(pageToRender, 150);
+                    return SwingFXUtils.toFXImage(img, null);
+                }
             }
         };
 
-        currentRenderTask.setOnSucceeded(e -> {
-            if (!currentRenderTask.isCancelled()) {
-                double screenHeight = javafx.stage.Screen.getPrimary().getBounds().getHeight();
-                imageView.setFitHeight(screenHeight);
-                imageView.setImage(currentRenderTask.getValue());
-            }
+        task.setOnSucceeded(e -> {
+            // Un rendu plus récent existe → on ignore
+            if (renderVersion.get() != myVersion) return;
+
+            imageView.setFitHeight(
+                    javafx.stage.Screen.getPrimary().getBounds().getHeight()
+            );
+            imageView.setImage(task.getValue());
         });
 
-        currentRenderTask.setOnFailed(e -> {
-            Throwable ex = currentRenderTask.getException();
-            if (!(ex instanceof CancellationException)) {
-                ex.printStackTrace();
-            }
+        task.setOnFailed(e -> {
+            task.getException().printStackTrace();
         });
 
-        new Thread(currentRenderTask).start();
+        new Thread(task, "pdf-render-" + myVersion).start();
     }
+
+
+
 
 
     /* =========================
        Fermeture PDF
        ========================= */
-
     public synchronized void closePdf() {
-        if (currentRenderTask != null && currentRenderTask.isRunning()) {
-            currentRenderTask.cancel();
-        }
-        if (currentDocument != null) {
-            try {
-                currentDocument.close();
-            } catch (IOException ignored) {}
-            currentDocument = null;
-            renderer = null;
-            imageView.setImage(null);
-        }
+        renderVersion.incrementAndGet(); // invalide les rendus en cours
+        imageView.setImage(null);
     }
+
+//    public synchronized void closePdf() {
+//        if (currentRenderTask != null && currentRenderTask.isRunning()) {
+//            currentRenderTask.cancel();
+//        }
+//        if (currentDocument != null) {
+//            try {
+//                currentDocument.close();
+//            } catch (IOException ignored) {}
+//            currentDocument = null;
+//            renderer = null;
+//            imageView.setImage(null);
+//        }
+//    }
 
     /* =========================
    Mise à jour de la liste PDF
    ========================= */
-    public void setPdfList(List<DocumentFile> pdfList) {
-        // Trier du plus récent au plus ancien
-        pdfList.sort((d1, d2) -> d2.getDateImport().compareTo(d1.getDateImport()));
+    public void setPdfList(List<DocumentFile> pdfList, Candidature c) {
+        currentCandidature = c;
 
-        pdfSelector.getItems().setAll(pdfList);
+        // Fermer le PDF précédent
+        closePdf();
+        currentDocumentFile = null;
+
+        // Mettre à jour la liste de la ComboBox
+        pdfSelector.getItems().setAll(FXCollections.observableArrayList(pdfList));
+
+        // Forcer sélection et refresh
         if (!pdfList.isEmpty()) {
             pdfSelector.getSelectionModel().select(0);
-        } else {
-            closePdf();
-            currentDocumentFile = null;
+            pdfSelector.setValue(pdfList.get(0)); // force refresh
         }
     }
+
+
 
 
 }
