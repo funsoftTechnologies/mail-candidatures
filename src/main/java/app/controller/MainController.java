@@ -8,6 +8,8 @@ import javafx.collections.ObservableList;
 import javafx.scene.control.TableView;
 import lombok.Getter;
 
+import java.util.Comparator;
+
 public class MainController {
 
     @Getter
@@ -17,20 +19,19 @@ public class MainController {
     public MainController(TableView<Candidature> table) {
         FileSystemService.init();
         candidatures = FXCollections.observableArrayList(repository.load());
+        sort();
         table.setItems(candidatures);
     }
 
     public void add(Candidature c) {
         candidatures.add(c);
-        repository.save(candidatures);
+        sort();
+        save();
     }
 
     public void delete(Candidature c) {
-        // Supprimer les fichiers associés si nécessaire
-        // FileSystemService.deleteFolder(c.getDossier());
-
-        // Supprimer de la liste interne
         candidatures.remove(c);
+        sort();
         save();
     }
 
@@ -38,4 +39,9 @@ public class MainController {
         repository.save(candidatures);
     }
 
+    private void sort() {
+        candidatures.sort(
+                Comparator.comparing(Candidature::getDateEnvoi).reversed()
+        );
+    }
 }

@@ -180,17 +180,12 @@ public class MainApp extends Application {
         /* =========================
            MENU CONTEXTUEL PDF
            ========================= */
-        ContextMenu docMenu = new ContextMenu();
-
-        // Forcer refresh
-        var selected = pdfViewerPane.getPdfSelector().getSelectionModel().getSelectedItem();
-        pdfViewerPane.getPdfSelector().getItems().setAll(pdfViewerPane.getPdfSelector().getItems());
-        pdfViewerPane.getPdfSelector().getSelectionModel().select(selected);
-
 
         MenuItem changeType = new MenuItem("Modifier type");
         changeType.setOnAction(e -> {
-            DocumentFile doc = pdfViewerPane.getPdfSelector().getSelectionModel().getSelectedItem();
+            DocumentFile doc = pdfViewerPane.getPdfListView()
+                    .getSelectionModel()
+                    .getSelectedItem();
             if (doc == null) return;
 
             ChoiceDialog<DocumentType> dialog =
@@ -211,6 +206,9 @@ public class MainApp extends Application {
 
                     controller.save();
 
+                    // refresh visuel ListView
+                    pdfViewerPane.getPdfListView().refresh();
+
                 } catch (IOException ex) {
                     ex.printStackTrace();
 
@@ -221,27 +219,28 @@ public class MainApp extends Application {
                     alert.showAndWait();
                 }
             });
-
-
         });
 
         MenuItem deleteDoc = new MenuItem("Supprimer");
         deleteDoc.setOnAction(e -> {
-            DocumentFile doc = pdfViewerPane.getPdfSelector().getSelectionModel().getSelectedItem();
+            DocumentFile doc = pdfViewerPane.getPdfListView()
+                    .getSelectionModel()
+                    .getSelectedItem();
             if (doc == null) return;
 
             doc.getFichier().toFile().delete();
+
             Candidature c = table.getSelectionModel().getSelectedItem();
             if (c != null) c.getDocuments().remove(doc);
 
-            pdfViewerPane.getPdfSelector().getItems().remove(doc);
+            pdfViewerPane.getPdfListView().getItems().remove(doc);
+
             controller.save();
             table.refresh();
-
         });
 
-        docMenu.getItems().addAll(changeType, deleteDoc);
-        pdfViewerPane.getPdfSelector().setContextMenu(docMenu);
+        ContextMenu docMenu = new ContextMenu(changeType, deleteDoc);
+        pdfViewerPane.getPdfListView().setContextMenu(docMenu);
 
         /* =========================
            BOUTONS
@@ -271,20 +270,20 @@ public class MainApp extends Application {
 
         table.setFocusTraversable(true);
         pdfViewerPane.setFocusTraversable(true);
-        pdfViewerPane.getPdfSelector().setFocusTraversable(true);
+        pdfViewerPane.getPdfListView().setFocusTraversable(true);
 
         // Flèches gauche/droite pour changer de focus
         scene.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
             switch (event.getCode()) {
                 case LEFT -> {
-                    if (pdfViewerPane.isFocused() || pdfViewerPane.getPdfSelector().isFocused()) {
+                    if (pdfViewerPane.isFocused() || pdfViewerPane.getPdfListView().isFocused()) {
                         table.requestFocus();
                         event.consume();
                     }
                 }
                 case RIGHT -> {
                     if (table.isFocused()) {
-                        pdfViewerPane.getPdfSelector().requestFocus();
+                        pdfViewerPane.getPdfListView().requestFocus();
                         event.consume();
                     }
                 }
@@ -351,10 +350,35 @@ public class MainApp extends Application {
         TextField entreprise = new TextField();
         TextField poste = new TextField();
 
+        ChoiceBox<StatutCandidature> statut =
+                new ChoiceBox<>(FXCollections.observableArrayList(StatutCandidature.values()));
+        statut.setValue(StatutCandidature.EN_ATTENTE);
+
+        Button importPdfBtn = new Button("Importer PDF");
+        final DocumentFile[] imported = new DocumentFile[1];
+
+        importPdfBtn.setOnAction(e -> {
+            try {
+                FileChooser chooser = new FileChooser();
+                chooser.getExtensionFilters().add(
+                        new FileChooser.ExtensionFilter("PDF", "*.pdf")
+                );
+                File f = chooser.showOpenDialog(stage);
+                if (f == null) return;
+
+                imported[0] = new DocumentFile();
+                imported[0].setFichier(f.toPath());
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        });
+
         VBox content = new VBox(10,
                 new Label("Date"), date,
                 new Label("Entreprise"), entreprise,
-                new Label("Poste"), poste
+                new Label("Poste"), poste,
+                new Label("Statut"), statut,
+                importPdfBtn
         );
         content.setPadding(new Insets(10));
         dialog.getDialogPane().setContent(content);
@@ -364,12 +388,25 @@ public class MainApp extends Application {
 
             Candidature c = new Candidature(entreprise.getText(), poste.getText());
             c.setDateEnvoi(date.getValue());
-            c.setStatut(StatutCandidature.EN_ATTENTE); // <- statut par défaut
+            c.setStatut(statut.getValue());
 
             Path dossier = FileSystemService.createCandidatureFolder(
                     (c.getEntreprise() + "_" + c.getPoste()).replaceAll("\\W+", "_")
             );
             c.setDossier(dossier);
+
+            if (imported[0] != null) {
+                try {
+                    DocumentFile doc = PdfImportService.importer(
+                            imported[0].getFichier(),
+                            dossier,
+                            DocumentType.REPONSE
+                    );
+                    c.getDocuments().add(doc);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
 
             return c;
         });
@@ -378,55 +415,38 @@ public class MainApp extends Application {
         table.refresh();
     }
 
+
     private void importPdf(Stage stage) throws IOException {
         Candidature c = table.getSelectionModel().getSelectedItem();
         if (c == null) return;
 
+        ChoiceDialog<DocumentType> typeDialog =
+                new ChoiceDialog<>(DocumentType.REPONSE, DocumentType.values());
+        typeDialog.setTitle("Type du document");
+        typeDialog.setHeaderText("Choisir le type du PDF");
+
+        var typeOpt = typeDialog.showAndWait();
+        if (typeOpt.isEmpty()) return;
+
         FileChooser chooser = new FileChooser();
-        chooser.setTitle("Importer un PDF");
-        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("PDF", "*.pdf"));
+        chooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter("PDF", "*.pdf")
+        );
 
         File f = chooser.showOpenDialog(stage);
         if (f == null) return;
 
-        // Charger le PDF pour récupérer sa date
-        LocalDate pdfDate = null;
-        try (PDDocument doc = Loader.loadPDF(f)) {
-            var creationDate = doc.getDocumentInformation().getCreationDate();
-            if (creationDate != null) {
-                pdfDate = creationDate.toInstant()
-                        .atZone(ZoneId.systemDefault())
-                        .toLocalDate();
-            } else {
-                pdfDate = Files.readAttributes(f.toPath(), BasicFileAttributes.class)
-                        .creationTime()
-                        .toInstant()
-                        .atZone(ZoneId.systemDefault())
-                        .toLocalDate();
-            }
-        } catch (IOException ex) {
-            ex.printStackTrace();
-        }
-
-        // Crée le DocumentFile
         DocumentFile doc = PdfImportService.importer(
                 f.toPath(),
                 c.getDossier(),
-                DocumentType.REPONSE
+                typeOpt.get()
         );
 
-        // Ajouter le document à la candidature
         c.getDocuments().add(doc);
-
-        // Trier la liste des PDFs (du plus récent au plus ancien)
-        c.getDocuments().sort((d1, d2) -> d2.getDateImport().compareTo(d1.getDateImport()));
-
-        // Mettre à jour le PdfViewerPane
-        pdfViewerPane.setPdfList(c.getDocuments(), c);
-
-        // Sauvegarder dans le JSON
         controller.save();
+        pdfViewerPane.setPdfList(c.getDocuments(), c);
     }
+
 
 
     public static void main(String[] args) {
