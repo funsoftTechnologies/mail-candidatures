@@ -18,6 +18,7 @@ import org.apache.pdfbox.rendering.PDFRenderer;
 
 import java.awt.image.BufferedImage;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -59,7 +60,7 @@ public class PdfViewerPane extends BorderPane {
                 super.updateItem(item, empty);
                 setText(empty || item == null
                         ? null
-                        : item.getDateImport()
+                        : item.getDateMail()
                         + " | "
                         + item.getType()
                         + " - "
@@ -110,7 +111,11 @@ public class PdfViewerPane extends BorderPane {
         currentCandidature = c;
         closePdf();
 
-        pdfList.sort(Comparator.comparing(DocumentFile::getDateImport));
+        pdfList.sort(Comparator.comparing(
+                DocumentFile::getDateMail,
+                Comparator.nullsLast(Comparator.naturalOrder())
+        ));
+
         pdfListView.setItems(FXCollections.observableArrayList(pdfList));
 
         if (!pdfList.isEmpty()) {

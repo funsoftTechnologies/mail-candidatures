@@ -17,7 +17,7 @@ public class DocumentFile {
 
     private Path fichier;
     private DocumentType type;
-    private LocalDateTime dateImport;
+    private LocalDateTime dateMail;
     private String nom;
 
     @Override

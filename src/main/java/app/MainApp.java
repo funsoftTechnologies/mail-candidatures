@@ -15,16 +15,15 @@ import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.pdmodel.PDDocument;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.time.LocalDate;
-import java.time.ZoneId;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 
 public class MainApp extends Application {
 
@@ -32,81 +31,83 @@ public class MainApp extends Application {
     private MainController controller;
     private PdfViewerPane pdfViewerPane;
 
+    private final DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm");
+
     @Override
     public void start(Stage stage) {
 
         FileSystemService.init();
 
-        /* =========================
-           TABLEVIEW CANDIDATURES
-           ========================= */
+        /* ========================= TABLEVIEW ========================= */
         table = new TableView<>();
-
         table.setRowFactory(tv -> {
             TableRow<Candidature> row = new TableRow<>();
-            ContextMenu contextMenu = new ContextMenu();
+            ContextMenu menu = new ContextMenu();
 
-            MenuItem editItem = new MenuItem("Modifier");
-            editItem.setOnAction(e -> {
+            MenuItem edit = new MenuItem("Modifier");
+            edit.setOnAction(e -> {
                 Candidature c = row.getItem();
                 if (c != null) editCandidature(c);
             });
 
-            MenuItem deleteItem = new MenuItem("Supprimer");
-            deleteItem.setOnAction(e -> {
+            MenuItem delete = new MenuItem("Supprimer");
+            delete.setOnAction(e -> {
                 Candidature c = row.getItem();
-                if (c != null) {
-                    Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
-                    confirm.setTitle("Confirmation");
-                    confirm.setHeaderText("Supprimer la candidature ?");
-                    confirm.setContentText(c.getEntreprise() + " - " + c.getPoste());
+                if (c == null) return;
 
-                    confirm.showAndWait().ifPresent(response -> {
-                        if (response == ButtonType.OK) {
-                            try {
-                                FileSystemService.deleteRecursively(c.getDossier());
-
-                            } catch (IOException ex) {
-                                ex.printStackTrace();
-
-                                Alert alert = new Alert(Alert.AlertType.ERROR);
-                                alert.setTitle("Erreur");
-                                alert.setHeaderText("Suppression impossible");
-                                alert.setContentText("Impossible de supprimer les fichiers sur le disque.");
-                                alert.showAndWait();
-                                return;
-                            }
-
-                            table.getItems().remove(c);
+                Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+                confirm.setTitle("Confirmation");
+                confirm.setHeaderText("Supprimer la candidature ?");
+                confirm.setContentText(c.getEntreprise() + " - " + c.getPoste());
+                confirm.showAndWait().ifPresent(btn -> {
+                    if (btn == ButtonType.OK) {
+                        try {
+                            FileSystemService.deleteRecursively(c.getDossier());
                             controller.delete(c);
-
-                            // Vider le PdfViewerPane si la candidature supprimée était sélectionnée
+                            table.getItems().remove(c);
                             pdfViewerPane.setPdfList(FXCollections.observableArrayList(), null);
+                        } catch (IOException ex) {
+                            ex.printStackTrace();
+                            new Alert(Alert.AlertType.ERROR,
+                                    "Impossible de supprimer les fichiers.").showAndWait();
                         }
-                    });
-                }
+                    }
+                });
             });
 
-            contextMenu.getItems().addAll(editItem, deleteItem);
+            menu.getItems().addAll(edit, delete);
+
+            // Trier les candidatures par date (plus récent en premier)
+            table.getItems().sort((c1, c2) -> {
+                if (c1.getDateEnvoi() == null) return 1;
+                if (c2.getDateEnvoi() == null) return -1;
+                return c2.getDateEnvoi().compareTo(c1.getDateEnvoi());
+            });
+
+            // Sélectionner la première candidature
+            if (!table.getItems().isEmpty()) {
+                table.getSelectionModel().select(0);
+            }
 
             row.contextMenuProperty().bind(
                     javafx.beans.binding.Bindings.when(row.emptyProperty())
                             .then((ContextMenu) null)
-                            .otherwise(contextMenu)
+                            .otherwise(menu)
             );
-
             return row;
         });
+
         TableColumn<Candidature, Number> colIndex = new TableColumn<>("N°");
         colIndex.setCellValueFactory(c ->
                 new javafx.beans.property.ReadOnlyObjectWrapper<>(table.getItems().indexOf(c.getValue()) + 1)
         );
-        colIndex.setSortable(false); // optionnel, l'index n'a pas besoin d'être triable
-        colIndex.setPrefWidth(50); // largeur fixe adaptée
+        colIndex.setSortable(false);
+        colIndex.setPrefWidth(30);
 
         TableColumn<Candidature, LocalDate> colDate = new TableColumn<>("Date");
         colDate.setCellValueFactory(c ->
                 new javafx.beans.property.SimpleObjectProperty<>(c.getValue().getDateEnvoi()));
+        colDate.setPrefWidth(60);
 
         TableColumn<Candidature, String> colEntreprise = new TableColumn<>("Entreprise");
         colEntreprise.setCellValueFactory(c ->
@@ -119,181 +120,156 @@ public class MainApp extends Application {
         TableColumn<Candidature, String> colStatut = new TableColumn<>("Statut");
         colStatut.setCellValueFactory(c ->
                 new javafx.beans.property.SimpleStringProperty(c.getValue().getStatut().name()));
+        colStatut.setPrefWidth(60);
 
         table.getColumns().addAll(colIndex, colDate, colEntreprise, colPoste, colStatut);
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
 
 
-        /* =========================
-           CONTROLLER
-           ========================= */
         controller = new MainController(table);
 
-        /* =========================
-           PDF VIEWER
-           ========================= */
+        /* ========================= PDF VIEWER ========================= */
         pdfViewerPane = new PdfViewerPane(FXCollections.observableArrayList(), controller);
 
-        VBox rightPane = new VBox(10, pdfViewerPane);
+        pdfViewerPane.getPdfListView().setCellFactory(lv -> new ListCell<DocumentFile>() {
+            @Override
+            protected void updateItem(DocumentFile doc, boolean empty) {
+                super.updateItem(doc, empty);
+                if (empty || doc == null) {
+                    setText(null);
+                } else {
+                    String dateStr = doc.getDateMail() != null ?
+                            doc.getDateMail().format(dateFormatter) : "Date inconnue";
+                    setText(doc.getType() + " - " + doc.getFichier().getFileName() + " (" + dateStr + ")");
+                }
+            }
+        });
+
+        VBox rightPane = new VBox(pdfViewerPane);
         rightPane.setPadding(new Insets(10));
         VBox.setVgrow(pdfViewerPane, Priority.ALWAYS);
 
-        /* =========================
-           SPLITPANE
-           ========================= */
         SplitPane splitPane = new SplitPane(table, rightPane);
         splitPane.setDividerPositions(0.4);
-
         BorderPane root = new BorderPane(splitPane);
 
-
-
-        /* =========================
-           TRI ET PREMIERE SELECTION
-           ========================= */
-        table.getItems().sort((c1, c2) -> c2.getDateEnvoi().compareTo(c1.getDateEnvoi()));
-        if (!table.getItems().isEmpty()) {
-            table.getSelectionModel().select(0);
-            table.requestFocus();
-
-            Candidature first = table.getSelectionModel().getSelectedItem();
-            if (first != null) {
-                // Trier du plus récent au plus ancien
-                first.getDocuments().sort((d1, d2) -> d2.getDateImport().compareTo(d1.getDateImport()));
-                pdfViewerPane.setPdfList(first.getDocuments(), first);
-            }
-        }
-
-        /* =========================
-           SELECTION CANDIDATURE
-           ========================= */
+        /* ========================= SELECTION ========================= */
         table.getSelectionModel().selectedItemProperty().addListener((obs, old, c) -> {
             if (c == null) {
                 pdfViewerPane.setPdfList(FXCollections.observableArrayList(), null);
                 return;
             }
-            // Trier du plus récent au plus ancien
-            c.getDocuments().sort((d1, d2) -> d2.getDateImport().compareTo(d1.getDateImport()));
+
+            c.getDocuments().sort((d1, d2) -> {
+                LocalDateTime dt1 = d1.getDateMail() != null ? d1.getDateMail() : LocalDateTime.MIN;
+                LocalDateTime dt2 = d2.getDateMail() != null ? d2.getDateMail() : LocalDateTime.MIN;
+                return dt2.compareTo(dt1); // plus récent en premier
+            });
+
+            // Menu contextuel PDF
+            MenuItem changeType = new MenuItem("Modifier type");
+            changeType.setOnAction(e -> {
+                DocumentFile doc = pdfViewerPane.getPdfListView().getSelectionModel().getSelectedItem();
+                if (doc == null) return;
+                ChoiceDialog<DocumentType> dialog = new ChoiceDialog<>(doc.getType(), DocumentType.values());
+                dialog.setTitle("Type du document");
+                dialog.setHeaderText("Choisir le type");
+                dialog.showAndWait().ifPresent(newType -> {
+                    try {
+                        Path newPath = FileSystemService.moveDocument(doc.getFichier(),
+                                table.getSelectionModel().getSelectedItem().getDossier(),
+                                newType);
+                        doc.setType(newType);
+                        doc.setFichier(newPath);
+                        controller.save();
+                        pdfViewerPane.getPdfListView().refresh();
+                    } catch (IOException ex) {
+                        ex.printStackTrace();
+                        new Alert(Alert.AlertType.ERROR, "Impossible de déplacer le fichier").showAndWait();
+                    }
+                });
+            });
+
+            MenuItem deleteDoc = new MenuItem("Supprimer");
+            deleteDoc.setOnAction(e -> {
+                DocumentFile doc = pdfViewerPane.getPdfListView().getSelectionModel().getSelectedItem();
+                if (doc == null) return;
+                Alert confirm = new Alert(Alert.AlertType.CONFIRMATION, "Supprimer ce document ?");
+                confirm.showAndWait().ifPresent(btn -> {
+                    if (btn == ButtonType.OK) {
+                        try { Files.deleteIfExists(doc.getFichier()); } catch (IOException ignored) {}
+                        Candidature cand = table.getSelectionModel().getSelectedItem();
+                        if (cand != null) cand.getDocuments().remove(doc);
+                        pdfViewerPane.getPdfListView().getItems().remove(doc);
+                        controller.save();
+                        table.refresh();
+                    }
+                });
+            });
+
+            MenuItem changeDate = new MenuItem("Modifier date");
+            changeDate.setOnAction(e -> {
+                DocumentFile doc = pdfViewerPane.getPdfListView().getSelectionModel().getSelectedItem();
+                if (doc == null) return;
+
+                Dialog<LocalDateTime> dialog = new Dialog<>();
+                dialog.setTitle("Modifier la date du document");
+                dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+
+                DatePicker datePicker = new DatePicker(doc.getDateMail() != null ? doc.getDateMail().toLocalDate() : LocalDate.now());
+                Spinner<Integer> hourSpinner = new Spinner<>(0, 23, doc.getDateMail() != null ? doc.getDateMail().getHour() : 12);
+                Spinner<Integer> minuteSpinner = new Spinner<>(0, 59, doc.getDateMail() != null ? doc.getDateMail().getMinute() : 0);
+                HBox timeBox = new HBox(5, hourSpinner, new Label(":"), minuteSpinner);
+                VBox content = new VBox(10, new Label("Date"), datePicker, new Label("Heure"), timeBox);
+                content.setPadding(new Insets(10));
+                dialog.getDialogPane().setContent(content);
+
+                dialog.setResultConverter(btn -> {
+                    if (btn == ButtonType.OK) {
+                        return LocalDateTime.of(datePicker.getValue(), LocalTime.of(hourSpinner.getValue(), minuteSpinner.getValue()));
+                    }
+                    return null;
+                });
+
+                dialog.showAndWait().ifPresent(newDate -> {
+                    doc.setDateMail(newDate);
+                    controller.save();
+                    Candidature cand = table.getSelectionModel().getSelectedItem();
+                    if (cand != null) {
+                        cand.getDocuments().sort((d1, d2) -> {
+                            LocalDateTime dt1 = d1.getDateMail() != null ? d1.getDateMail() : LocalDateTime.MIN;
+                            LocalDateTime dt2 = d2.getDateMail() != null ? d2.getDateMail() : LocalDateTime.MIN;
+                            return dt2.compareTo(dt1);
+                        });
+                        pdfViewerPane.setPdfList(cand.getDocuments(), cand);
+                    }
+                });
+            });
+
+            ContextMenu docMenu = new ContextMenu(changeType, deleteDoc, changeDate);
+            pdfViewerPane.getPdfListView().setContextMenu(docMenu);
+
             pdfViewerPane.setPdfList(c.getDocuments(), c);
         });
 
-        /* =========================
-           MENU CONTEXTUEL PDF
-           ========================= */
-
-        MenuItem changeType = new MenuItem("Modifier type");
-        changeType.setOnAction(e -> {
-            DocumentFile doc = pdfViewerPane.getPdfListView()
-                    .getSelectionModel()
-                    .getSelectedItem();
-            if (doc == null) return;
-
-            ChoiceDialog<DocumentType> dialog =
-                    new ChoiceDialog<>(doc.getType(), DocumentType.values());
-            dialog.setTitle("Type du document");
-            dialog.setHeaderText("Choisir le type");
-
-            dialog.showAndWait().ifPresent(newType -> {
-                try {
-                    Path newPath = FileSystemService.moveDocument(
-                            doc.getFichier(),
-                            table.getSelectionModel().getSelectedItem().getDossier(),
-                            newType
-                    );
-
-                    doc.setType(newType);
-                    doc.setFichier(newPath);
-
-                    controller.save();
-
-                    // refresh visuel ListView
-                    pdfViewerPane.getPdfListView().refresh();
-
-                } catch (IOException ex) {
-                    ex.printStackTrace();
-
-                    Alert alert = new Alert(Alert.AlertType.ERROR);
-                    alert.setTitle("Erreur");
-                    alert.setHeaderText("Déplacement impossible");
-                    alert.setContentText("Le document n'a pas pu être déplacé.");
-                    alert.showAndWait();
-                }
-            });
-        });
-
-        MenuItem deleteDoc = new MenuItem("Supprimer");
-        deleteDoc.setOnAction(e -> {
-            DocumentFile doc = pdfViewerPane.getPdfListView()
-                    .getSelectionModel()
-                    .getSelectedItem();
-            if (doc == null) return;
-
-            doc.getFichier().toFile().delete();
-
-            Candidature c = table.getSelectionModel().getSelectedItem();
-            if (c != null) c.getDocuments().remove(doc);
-
-            pdfViewerPane.getPdfListView().getItems().remove(doc);
-
-            controller.save();
-            table.refresh();
-        });
-
-        ContextMenu docMenu = new ContextMenu(changeType, deleteDoc);
-        pdfViewerPane.getPdfListView().setContextMenu(docMenu);
-
-        /* =========================
-           BOUTONS
-           ========================= */
+        /* ========================= TOOLBAR ========================= */
         Button addCandidature = new Button("Nouvelle candidature");
         addCandidature.setOnAction(e -> createCandidature(stage));
 
         Button importPdf = new Button("Importer PDF");
         importPdf.setOnAction(e -> {
-            try {
-                importPdf(stage);
-            } catch (IOException ex) {
-                throw new RuntimeException(ex);
-            }
+            try { importPdf(stage); } catch (IOException ex) { ex.printStackTrace(); }
         });
 
-        ToolBar toolbar = new ToolBar(addCandidature, importPdf);
-        root.setTop(toolbar);
+        root.setTop(new ToolBar(addCandidature, importPdf));
 
-        /* =========================
-           SCENE ET NAVIGATION CLAVIER
-           ========================= */
         Scene scene = new Scene(root, 1300, 650);
-        stage.setTitle("Gestion des candidatures");
         stage.setScene(scene);
+        stage.setTitle("Gestion des candidatures");
         stage.show();
-
-        table.setFocusTraversable(true);
-        pdfViewerPane.setFocusTraversable(true);
-        pdfViewerPane.getPdfListView().setFocusTraversable(true);
-
-        // Flèches gauche/droite pour changer de focus
-        scene.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
-            switch (event.getCode()) {
-                case LEFT -> {
-                    if (pdfViewerPane.isFocused() || pdfViewerPane.getPdfListView().isFocused()) {
-                        table.requestFocus();
-                        event.consume();
-                    }
-                }
-                case RIGHT -> {
-                    if (table.isFocused()) {
-                        pdfViewerPane.getPdfListView().requestFocus();
-                        event.consume();
-                    }
-                }
-            }
-        });
     }
 
-    /* =========================
-       CREATION & MODIFICATION CANDIDATURE
-       ========================= */
+    /* ========================= EDIT CANDIDATURE ========================= */
     private void editCandidature(Candidature c) {
         Dialog<Candidature> dialog = new Dialog<>();
         dialog.setTitle("Modifier candidature");
@@ -304,11 +280,7 @@ public class MainApp extends Application {
         DatePicker datePicker = new DatePicker(c.getDateEnvoi());
         TextField entrepriseField = new TextField(c.getEntreprise());
         TextField posteField = new TextField(c.getPoste());
-
-        // ChoiceBox pour le statut
-        ChoiceBox<StatutCandidature> statutChoice = new ChoiceBox<>(
-                FXCollections.observableArrayList(StatutCandidature.values())
-        );
+        ChoiceBox<StatutCandidature> statutChoice = new ChoiceBox<>(FXCollections.observableArrayList(StatutCandidature.values()));
         statutChoice.setValue(c.getStatut());
 
         VBox content = new VBox(10,
@@ -325,7 +297,7 @@ public class MainApp extends Application {
                 c.setDateEnvoi(datePicker.getValue());
                 c.setEntreprise(entrepriseField.getText());
                 c.setPoste(posteField.getText());
-                c.setStatut(statutChoice.getValue()); // <- mise à jour du statut
+                c.setStatut(statutChoice.getValue());
                 return c;
             }
             return null;
@@ -335,10 +307,9 @@ public class MainApp extends Application {
             controller.save();
             table.refresh();
         });
-        table.refresh();
     }
 
-
+    /* ========================= CREATE CANDIDATURE ========================= */
     private void createCandidature(Stage stage) {
         Dialog<Candidature> dialog = new Dialog<>();
         dialog.setTitle("Nouvelle candidature");
@@ -380,6 +351,11 @@ public class MainApp extends Application {
                 new Label("Statut"), statut,
                 importPdfBtn
         );
+
+        DatePicker mailDatePicker = new DatePicker(LocalDate.now());
+        Spinner<LocalTime> mailTimeSpinner = createTimeSpinner();
+        LocalDateTime mailDateTime = LocalDateTime.of( mailDatePicker.getValue(), mailTimeSpinner.getValue() );
+
         content.setPadding(new Insets(10));
         dialog.getDialogPane().setContent(content);
 
@@ -400,7 +376,8 @@ public class MainApp extends Application {
                     DocumentFile doc = PdfImportService.importer(
                             imported[0].getFichier(),
                             dossier,
-                            DocumentType.REPONSE
+                            DocumentType.REPONSE,
+                            mailDateTime
                     );
                     c.getDocuments().add(doc);
                 } catch (IOException e) {
@@ -415,41 +392,58 @@ public class MainApp extends Application {
         table.refresh();
     }
 
-
+    /* ========================= IMPORT PDF ========================= */
     private void importPdf(Stage stage) throws IOException {
         Candidature c = table.getSelectionModel().getSelectedItem();
         if (c == null) return;
 
-        ChoiceDialog<DocumentType> typeDialog =
-                new ChoiceDialog<>(DocumentType.REPONSE, DocumentType.values());
-        typeDialog.setTitle("Type du document");
-        typeDialog.setHeaderText("Choisir le type du PDF");
-
-        var typeOpt = typeDialog.showAndWait();
-        if (typeOpt.isEmpty()) return;
+        ChoiceDialog<DocumentType> typeDialog = new ChoiceDialog<>(DocumentType.REPONSE, DocumentType.values());
+        typeDialog.setTitle("Type du document"); typeDialog.setHeaderText("Choisir le type du PDF");
+        var typeOpt = typeDialog.showAndWait(); if (typeOpt.isEmpty()) return;
 
         FileChooser chooser = new FileChooser();
-        chooser.getExtensionFilters().add(
-                new FileChooser.ExtensionFilter("PDF", "*.pdf")
-        );
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("PDF", "*.pdf"));
+        File f = chooser.showOpenDialog(stage); if (f == null) return;
 
-        File f = chooser.showOpenDialog(stage);
-        if (f == null) return;
+        // Saisie date mail
+        Dialog<LocalDateTime> dateDialog = new Dialog<>();
+        dateDialog.setTitle("Date du mail");
+        dateDialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        DatePicker datePicker = new DatePicker(LocalDate.now());
+        Spinner<Integer> hourSpinner = new Spinner<>(0, 23, LocalTime.now().getHour());
+        Spinner<Integer> minuteSpinner = new Spinner<>(0, 59, LocalTime.now().getMinute());
+        GridPane grid = new GridPane();
+        grid.setHgap(10); grid.setVgap(10);
+        grid.add(new Label("Date:"), 0,0); grid.add(datePicker, 1,0);
+        grid.add(new Label("Heure:"), 0,1); grid.add(hourSpinner, 1,1);
+        grid.add(new Label("Minute:"), 2,1); grid.add(minuteSpinner, 3,1);
+        dateDialog.getDialogPane().setContent(grid);
 
-        DocumentFile doc = PdfImportService.importer(
-                f.toPath(),
-                c.getDossier(),
-                typeOpt.get()
-        );
+        dateDialog.setResultConverter(btn -> {
+            if (btn == ButtonType.OK) return LocalDateTime.of(datePicker.getValue(),
+                    LocalTime.of(hourSpinner.getValue(), minuteSpinner.getValue()));
+            return null;
+        });
 
+        var mailDateOpt = dateDialog.showAndWait(); if (mailDateOpt.isEmpty()) return;
+
+        DocumentFile doc = PdfImportService.importer(f.toPath(), c.getDossier(), typeOpt.get(), mailDateOpt.get());
         c.getDocuments().add(doc);
         controller.save();
         pdfViewerPane.setPdfList(c.getDocuments(), c);
     }
 
-
-
-    public static void main(String[] args) {
-        launch(args);
+    private Spinner<LocalTime> createTimeSpinner() {
+        Spinner<LocalTime> spinner = new Spinner<>();
+        spinner.setValueFactory(new SpinnerValueFactory<>() {
+            { setValue(LocalTime.now()); }
+            @Override public void decrement(int steps) { setValue(getValue().minusMinutes(steps)); }
+            @Override public void increment(int steps) { setValue(getValue().plusMinutes(steps)); }
+        });
+        spinner.setEditable(true);
+        spinner.setPrefWidth(120);
+        return spinner;
     }
+
+    public static void main(String[] args) { launch(args); }
 }

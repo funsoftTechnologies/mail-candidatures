@@ -14,8 +14,10 @@ public class PdfImportService {
     public static DocumentFile importer(
             Path sourcePdf,
             Path dossierCandidature,
-            DocumentType type
-    ) throws IOException {
+            DocumentType type,
+            LocalDateTime dateMail
+    )
+throws IOException {
 
         // 1. Sous-dossier selon le type
         Path targetDir = dossierCandidature.resolve(type.getFolder());
@@ -44,8 +46,9 @@ public class PdfImportService {
         doc.setNom(target.getFileName().toString());
         doc.setFichier(target);
         doc.setType(type);
-        doc.setDateImport(LocalDateTime.now());
-
+        doc.setDateMail(
+                dateMail != null ? dateMail : LocalDateTime.now()
+        );
         return doc;
     }
 
