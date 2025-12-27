@@ -4,7 +4,6 @@ import app.controller.MainController;
 import app.model.Candidature;
 import app.model.DocumentFile;
 import app.model.DocumentType;
-import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.concurrent.Task;
 import javafx.embed.swing.SwingFXUtils;
@@ -21,10 +20,8 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
 import java.awt.image.BufferedImage;
-import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class PdfViewerPane extends BorderPane {
@@ -281,30 +278,9 @@ public class PdfViewerPane extends BorderPane {
 
 
 
-
     /* =========================
        Chargement PDF
        ========================= */
-//    private synchronized void openPdf(Path path) {
-//
-//        if (currentRenderTask != null && currentRenderTask.isRunning()) {
-//            currentRenderTask.cancel();
-//        }
-//
-//        // Fermer l'ancien document
-//        if (currentDocument != null) {
-//            try { currentDocument.close(); } catch (IOException ignored) {}
-//        }
-//
-//        try {
-//            currentDocument = Loader.loadPDF(path.toFile());
-//            renderer = new PDFRenderer(currentDocument);
-//            currentPage = 0;
-//            renderPage(); // maintenant safe
-//        } catch (IOException e) {
-//            e.printStackTrace();
-//        }
-//    }
     private synchronized void openPdf(Path path) {
         currentPdfPath = path;
         currentPage = 0;
@@ -312,42 +288,9 @@ public class PdfViewerPane extends BorderPane {
     }
 
 
-
     /* =========================
        Rendu page (thread-safe)
        ========================= */
-//    private synchronized void renderPage() {
-//        if (currentDocument == null) return; // utilise currentDocument au lieu de currentPdfPath
-//
-//        if (currentRenderTask != null && currentRenderTask.isRunning()) {
-//            currentRenderTask.cancel();
-//        }
-//
-//        currentRenderTask = new Task<>() {
-//            @Override
-//            protected Image call() throws Exception {
-//                BufferedImage image = renderer.renderImageWithDPI(currentPage, 150);
-//                return SwingFXUtils.toFXImage(image, null);
-//            }
-//        };
-//
-//        currentRenderTask.setOnSucceeded(e -> {
-//            if (!currentRenderTask.isCancelled()) {
-//                double screenHeight = javafx.stage.Screen.getPrimary().getBounds().getHeight();
-//                imageView.setFitHeight(screenHeight);
-//                imageView.setImage(currentRenderTask.getValue());
-//            }
-//        });
-//
-//        currentRenderTask.setOnFailed(e -> {
-//            Throwable ex = currentRenderTask.getException();
-//            if (!(ex instanceof CancellationException)) {
-//                ex.printStackTrace();
-//            }
-//        });
-//
-//        new Thread(currentRenderTask).start();
-//    }
     private void renderPage() {
         if (currentPdfPath == null) return;
 
@@ -384,9 +327,6 @@ public class PdfViewerPane extends BorderPane {
     }
 
 
-
-
-
     /* =========================
        Fermeture PDF
        ========================= */
@@ -395,19 +335,6 @@ public class PdfViewerPane extends BorderPane {
         imageView.setImage(null);
     }
 
-//    public synchronized void closePdf() {
-//        if (currentRenderTask != null && currentRenderTask.isRunning()) {
-//            currentRenderTask.cancel();
-//        }
-//        if (currentDocument != null) {
-//            try {
-//                currentDocument.close();
-//            } catch (IOException ignored) {}
-//            currentDocument = null;
-//            renderer = null;
-//            imageView.setImage(null);
-//        }
-//    }
 
     /* =========================
    Mise à jour de la liste PDF
@@ -428,8 +355,5 @@ public class PdfViewerPane extends BorderPane {
             pdfSelector.setValue(pdfList.get(0)); // force refresh
         }
     }
-
-
-
 
 }
