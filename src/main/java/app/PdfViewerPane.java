@@ -50,10 +50,21 @@ public class PdfViewerPane extends BorderPane {
         imageView.setCache(true);
         setCenter(imageView);
 
+// ScrollPane pour le PDF
+        ScrollPane pdfScrollPane = new ScrollPane(imageView);
+        pdfScrollPane.setFitToWidth(true);
+        pdfScrollPane.setFitToHeight(true);
+        pdfScrollPane.setPannable(true); // permet de bouger le PDF avec la souris
+        setCenter(pdfScrollPane);
+
+
+
+
+
         /* =========================
            LISTE DES PDFs (TOP)
            ========================= */
-        pdfListView.setPrefHeight(140); // hauteur lisible
+        pdfListView.setPrefHeight(200); // hauteur lisible
         pdfListView.setCellFactory(lv -> new ListCell<>() {
             @Override
             protected void updateItem(DocumentFile item, boolean empty) {
