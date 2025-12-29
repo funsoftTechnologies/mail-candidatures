@@ -1,12 +1,15 @@
 package app.service;
 
-import app.model.DocumentType;
+import app.model.Candidature;
+import app.model.DocumentFile;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Objects;
 
 public class FileSystemService {
 
@@ -26,14 +29,7 @@ public class FileSystemService {
     }
 
     public static Path createCandidatureFolder(String nom) {
-        try {
-            Path dossier = ROOT.resolve(nom);
-            Files.createDirectories(dossier.resolve(DocumentType.ENVOI.getFolder()));
-            Files.createDirectories(dossier.resolve(DocumentType.REPONSE.getFolder()));
-            return dossier;
-        } catch (IOException e) {
-            throw new RuntimeException("Erreur création dossier candidature", e);
-        }
+        return ROOT.resolve(nom);
     }
 
 
@@ -51,29 +47,55 @@ public class FileSystemService {
                 });
     }
 
-    public static Path moveDocument(
-            Path currentFile,
-            Path dossierCandidature,
-            DocumentType newType
-    ) throws IOException {
+    public static Path renameCandidatureFolderWithOldestPdfDate(Candidature c) throws IOException {
 
-        Path targetDir = dossierCandidature.resolve(newType.getFolder());
-        Files.createDirectories(targetDir);
-
-        Path target = targetDir.resolve(currentFile.getFileName());
-
-        if (Files.exists(target)) {
-            String name = target.getFileName().toString();
-            String base = name.replace(".pdf", "");
-            target = targetDir.resolve(base + "_" + System.currentTimeMillis() + ".pdf");
+        if (c.getDocuments() == null || c.getDocuments().isEmpty()) {
+            return c.getDossier();
         }
 
-        return Files.move(
-                currentFile,
-                target,
-                StandardCopyOption.REPLACE_EXISTING
-        );
-    }
+        var oldestOpt = c.getDocuments().stream()
+                .map(DocumentFile::getDateMail)
+                .filter(Objects::nonNull)
+                .min(LocalDateTime::compareTo);
 
+        if (oldestOpt.isEmpty()) {
+            return c.getDossier();
+        }
+
+        String datePrefix = oldestOpt.get()
+                .toLocalDate()
+                .format(DateTimeFormatter.ISO_LOCAL_DATE);
+
+        String entreprise = c.getEntreprise()
+                .replaceAll("[\\\\/:*?\"<>|]", "")
+                .trim();
+
+        String poste = c.getPoste()
+                .replaceAll("[\\\\/:*?\"<>|]", "")
+                .trim();
+
+        String newFolderName = datePrefix + " " + entreprise + " " + poste;
+
+        Path oldPath = c.getDossier();
+        Path newPath = oldPath.getParent().resolve(newFolderName);
+
+        if (oldPath.equals(newPath)) {
+            return oldPath;
+        }
+
+        Files.move(oldPath, newPath);
+
+        // 🔴 POINT CRITIQUE : mettre à jour les chemins des documents
+        for (DocumentFile doc : c.getDocuments()) {
+            Path oldFile = doc.getFichier();
+            if (oldFile != null) {
+                Path newFile = newPath.resolve(oldFile.getFileName());
+                doc.setFichier(newFile);
+            }
+        }
+
+        c.setDossier(newPath);
+        return newPath;
+    }
 
 }

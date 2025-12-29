@@ -1,6 +1,7 @@
 package app.controller;
 
 import app.model.Candidature;
+import app.model.DocumentFile;
 import app.repository.CandidatureRepository;
 import app.service.FileSystemService;
 import javafx.collections.FXCollections;
@@ -19,6 +20,20 @@ public class MainController {
     public MainController(TableView<Candidature> table) {
         FileSystemService.init();
         candidatures = FXCollections.observableArrayList(repository.load());
+
+        // 🔴 RESYNC DES CHEMINS
+        for (Candidature c : candidatures) {
+            if (c.getDossier() == null) continue;
+
+            for (DocumentFile doc : c.getDocuments()) {
+                if (doc.getFichier() != null) {
+                    doc.setFichier(
+                            c.getDossier().resolve(doc.getFichier().getFileName())
+                    );
+                }
+            }
+        }
+
         sort();
         table.setItems(candidatures);
     }
