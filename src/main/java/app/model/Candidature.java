@@ -18,17 +18,16 @@ import java.util.UUID;
 public class Candidature {
 
     private String id;
-    @Setter
     private String entreprise;
-    @Setter
     private String poste;
-    @Setter
     private LocalDate dateEnvoi;
     private StatutCandidature statut;
-    @Setter
     private Path dossier;
-
     private List<DocumentFile> documents = new ArrayList<>();
+
+    // === Nouveaux champs ===
+    private String notes;
+    private LocalDate dateRelance;
 
     public Candidature(String entreprise, String poste) {
         this.id = UUID.randomUUID().toString();
@@ -40,5 +39,4 @@ public class Candidature {
     public void ajouterDocument(DocumentFile doc) {
         documents.add(doc);
     }
-
 }

@@ -16,7 +16,7 @@ import java.util.Objects;
 public class DocumentFile {
 
     private Path fichier;
-    private DocumentType type;
+//    private DocumentType type;
     private LocalDateTime dateMail;
     private String nom;
 
@@ -34,7 +34,7 @@ public class DocumentFile {
 
     @Override
     public String toString() {
-        return type + " - " + nom; // ou juste nom si tu préfères
+        return nom;
     }
 }
 

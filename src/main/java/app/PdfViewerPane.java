@@ -12,13 +12,11 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import lombok.Getter;
-import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
 import java.awt.image.BufferedImage;
 import java.nio.file.Path;
-import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -38,9 +36,11 @@ public class PdfViewerPane extends BorderPane {
     private final ListView<DocumentFile> pdfListView = new ListView<>();
 
     private int currentPage = 0;
+    private int pageCount = 0;
 
     public PdfViewerPane(List<DocumentFile> pdfList, MainController controller) {
         this.controller = controller;
+        imageView.fitWidthProperty().bind(widthProperty().subtract(20));
 
         /* =========================
            IMAGE VIEW (PDF)
@@ -73,7 +73,6 @@ public class PdfViewerPane extends BorderPane {
                         ? null
                         : item.getDateMail()
                         + " | "
-                        + item.getType()
                         + " - "
                         + item.getNom());
             }
@@ -107,8 +106,10 @@ public class PdfViewerPane extends BorderPane {
         });
 
         next.setOnAction(e -> {
-            currentPage++;
-            renderPage();
+            if (currentPage < pageCount - 1) {
+                currentPage++;
+                renderPage();
+            }
         });
 
         ToolBar toolbar = new ToolBar(prev, next);
@@ -140,6 +141,15 @@ public class PdfViewerPane extends BorderPane {
     private synchronized void openPdf(Path path) {
         currentPdfPath = path;
         currentPage = 0;
+
+        try (PDDocument doc = PDDocument.load(path.toFile())) {
+            pageCount = doc.getNumberOfPages();
+        } catch (Exception e) {
+            pageCount = 0;
+            e.printStackTrace();
+            return;
+        }
+
         renderPage();
     }
 
@@ -148,13 +158,14 @@ public class PdfViewerPane extends BorderPane {
        ========================= */
     private void renderPage() {
         if (currentPdfPath == null) return;
+        if (currentPage < 0 || currentPage >= pageCount) return;
 
         long version = renderVersion.incrementAndGet();
 
         Task<Image> task = new Task<>() {
             @Override
             protected Image call() throws Exception {
-                try (PDDocument doc = Loader.loadPDF(currentPdfPath.toFile())) {
+                try (PDDocument doc = PDDocument.load(currentPdfPath.toFile())) {
                     PDFRenderer renderer = new PDFRenderer(doc);
                     BufferedImage img = renderer.renderImageWithDPI(currentPage, 150);
                     return SwingFXUtils.toFXImage(img, null);
@@ -164,9 +175,7 @@ public class PdfViewerPane extends BorderPane {
 
         task.setOnSucceeded(e -> {
             if (renderVersion.get() == version) {
-                imageView.setFitWidth(
-                        getWidth() - 20
-                );
+//                imageView.setFitWidth(getWidth() - 20);
                 imageView.setImage(task.getValue());
             }
         });
